@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Case Opening</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, sans-serif; }
+  body {
+    background: radial-gradient(circle at 50% 0%, #1e2a4a, #0a0e1a 70%);
+    color: #fff; min-height: 100vh; display: flex;
+    flex-direction: column; align-items: center; justify-content: center;
+    padding: 20px; overflow: hidden;
+  }
+  h1 { font-size: 22px; margin-bottom: 6px; background: linear-gradient(90deg,#ffd700,#ff8c00);
+       -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .balance { font-size: 14px; color: #8fa3c8; margin-bottom: 20px; }
+  .balance b { color: #ffd700; }
+
+  /* Рулетка */
+  .roulette-wrap {
+    width: 100%; max-width: 360px; height: 110px;
+    background: #0d1424; border-radius: 14px; position: relative;
+    overflow: hidden; border: 1px solid #2a3a5c; margin-bottom: 20px;
+  }
+  .roulette-wrap::before, .roulette-wrap::after {
+    content: ''; position: absolute; top: 0; bottom: 0; width: 60px; z-index: 2;
+  }
+  .roulette-wrap::before { left: 0; background: linear-gradient(90deg,#0d1424,transparent); }
+  .roulette-wrap::after { right: 0; background: linear-gradient(-90deg,#0d1424,transparent); }
+  .pointer {
+    position: absolute; left: 50%; top: -2px; transform: translateX(-50%);
+    width: 0; height: 0; border-left: 8px solid transparent;
+    border-right: 8px solid transparent; border-top: 12px solid #ffd700;
+    z-index: 3; filter: drop-shadow(0 0 6px #ffd700);
+  }
+  .items { display: flex; height: 100%; align-items: center; will-change: transform; }
+  .item {
+    min-width: 90px; height: 90px; margin: 0 6px; border-radius: 10px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font-size: 12px; gap: 4px; background: #16203a; border: 1px solid #2a3a5c;
+  }
+  .item .icon { font-size: 26px; }
+  .item.rare { border-color: #b04cff; box-shadow: 0 0 12px #b04cff55; }
+  .item.epic { border-color: #ff4c8b; box-shadow: 0 0 12px #ff4c8b55; }
+  .item.legend { border-color: #ffd700; box-shadow: 0 0 16px #ffd70077; }
+
+  /* Кнопка */
+  button {
+    padding: 14px 40px; font-size: 16px; font-weight: 600; border: none;
+    border-radius: 12px; cursor: pointer; color: #1a1000;
+    background: linear-gradient(135deg,#ffd700,#ff8c00);
+    box-shadow: 0 4px 20px #ff8c0055; transition: transform .15s;
+  }
+  button:active { transform: scale(.96); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* Результат */
+  .result {
+    position: fixed; inset: 0; background: rgba(5,8,16,.92);
+    display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 16px; z-index: 10; padding: 20px;
+  }
+  .result.show { display: flex; animation: fadeIn .3s; }
+  @keyframes fadeIn { from { opacity: 0 } to { opacity: 1 } }
+  .result .big-icon { font-size: 80px; animation: pop .5s; }
+  @keyframes pop { 0%{transform:scale(0)} 70%{transform:scale(1.2)} 100%{transform:scale(1)} }
+  .result h2 { font-size: 20px; }
+  .result p { color: #8fa3c8; font-size: 14px; }
+  .close-btn { background: #2a3a5c; color: #fff; box-shadow: none; }
+</style>
+</head>
+<body>
+
+  <h1>🎁 Открытие кейса</h1>
+  <div class="balance">Баланс: <b id="balance">500</b> ⭐</div>
+
+  <div class="roulette-wrap">
+    <div class="pointer"></div>
+    <div class="items" id="items"></div>
+  </div>
+
+  <button id="openBtn">Открыть за 100 ⭐</button>
+
+  <div class="result" id="result">
+    <div class="big-icon" id="resIcon">⭐</div>
+    <h2 id="resTitle">Поздравляем!</h2>
+    <p id="resDesc">Вы выиграли 250 Stars</p>
+    <button class="close-btn" id="closeRes">Забрать</button>
+  </div>
+
+<script>
+  const tg = window.Telegram?.WebApp;
+  if (tg) { tg.ready(); tg.expand(); }
+
+  // ==== Призы с весами (шансами) ====
+  const PRIZES = [
+    { name: '10 ⭐',    icon: '⭐', rarity: '',       weight: 40, type: 'stars', value: 10 },
+    { name: '50 ⭐',    icon: '🌟', rarity: 'rare',   weight: 25, type: 'stars', value: 50 },
+    { name: 'Подарок',  icon: '🎁', rarity: 'rare',   weight: 18, type: 'gift',  value: 0 },
+    { name: '250 ⭐',   icon: '💫', rarity: 'epic',   weight: 12, type: 'stars', value: 250 },
+    { name: 'NFT',      icon: '💎', rarity: 'legend', weight: 5,  type: 'nft',   value: 0 },
+  ];
+
+  const CASE_PRICE = 100;
+  let balance = 500;
+  let spinning = false;
+
+  const itemsEl   = document.getElementById('items');
+  const balanceEl = document.getElementById('balance');
+  const openBtn   = document.getElementById('openBtn');
+  const resultEl  = document.getElementById('result');
+
+  // Взвешенный рандом
+  function pickPrize() {
+    const total = PRIZES.reduce((s, p) => s + p.weight, 0);
+    let r = Math.random() * total;
+    for (const p of PRIZES) {
+      if ((r -= p.weight) <= 0) return p;
+    }
+    return PRIZES[0];
+  }
+
+  // Создать элемент приза
+  function makeItem(p) {
+    const d = document.createElement('div');
+    d.className = 'item ' + (p.rarity || '');
+    d.innerHTML = `<div class="icon">${p.icon}</div><div>${p.name}</div>`;
+    return d;
+  }
+
+  // Заполнить ленту случайными призами
+  function fillStrip(winPrize) {
+    itemsEl.innerHTML = '';
+    const total = 40;
+    const winIndex = 34; // где остановится выигрыш
+    for (let i = 0; i < total; i++) {
+      itemsEl.appendChild(makeItem(i === winIndex ? winPrize : pickPrize()));
+    }
+    return winIndex;
+  }
+
+  async function openCase() {
+    if (spinning) return;
+    if (balance < CASE_PRICE) { alert('Недостаточно Stars'); return; }
+
+    spinning = true;
+    balance -= CASE_PRICE;
+    balanceEl.textContent = balance;
+    openBtn.disabled = true;
+
+    const prize = pickPrize();
+    const winIndex = fillStrip(prize);
+
+    // Сброс позиции
+    itemsEl.style.transition = 'none';
+    itemsEl.style.transform = 'translateX(0)';
+
+    const itemW = 102; // ширина + отступы
+    const wrapW = itemsEl.parentElement.clientWidth;
+    const targetX = -(winIndex * itemW) + wrapW / 2 - itemW / 2;
+
+    await new Promise(r => setTimeout(r, 30));
+
+    // Анимация прокрутки
+    itemsEl.style.transition = 'transform 4s cubic-bezier(0.15, 0.9, 0.3, 1)';
+    itemsEl.style.transform = `translateX(${targetX}px)`;
+
+    setTimeout(() => {
+      // Начисляем выигрыш
+      if (prize.type === 'stars') {
+        balance += prize.value;
+        balanceEl.textContent = balance;
+      }
+      showResult(prize);
+      spinning = false;
+      openBtn.disabled = false;
+    }, 4100);
+  }
+
+  function showResult(p) {
+    document.getElementById('resIcon').textContent  = p.icon;
+    document.getElementById('resTitle').textContent = 'Поздравляем!';
+    document.getElementById('resDesc').textContent  = p.type === 'stars'
+      ? `Вы выиграли ${p.value} Stars`
+      : p.type === 'gift' ? 'Вы выиграли подарок 🎁'
+      : 'Вы выиграли NFT 💎';
+    resultEl.classList.add('show');
+  }
+
+  openBtn.addEventListener('click', openCase);
+  document.getElementById('closeRes').addEventListener('click', () => {
+    resultEl.classList.remove('show');
+  });
+</script>
+</body>
+</html>
